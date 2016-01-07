@@ -8,7 +8,9 @@ const int EEPROM_MAX_ADDR = 511;
 
 #define FONA_RST 4
 #define FOB_LOCK 13
-#define FOB_START 14
+#define FOB_UNLOCK 14
+#define FOB_START 15
+#define FOB_ALARM 16
 // this is a large buffer for replies
 char replybuffer[255];
 
@@ -27,7 +29,9 @@ void setup() {
   Serial.println(F("Initializing....(May take 3 seconds)"));
 
   pinMode(FOB_LOCK, OUTPUT);
+  pinMode(FOB_UNLOCK, OUTPUT);
   pinMode(FOB_START, OUTPUT);
+  pinMode(FOB_ALARM, OUTPUT);
 
   // make it slow so its easy to read!
   fonaSerial->begin(4800);
@@ -85,16 +89,34 @@ void loop() {
       }
       char responseBuffer[255]; //we'll store the response here
       
-      eepromReadPass(0,password, sizeof(password));
+      eepromReadPass(0,password,sizeof(password));
       char* recText = strtok(replybuffer, ":");
-      if ((recText != NULL) && strcmp(recText, password)) {
+      if ((recText != NULL) && !strcmp(recText, password)) {
         recText = strtok(NULL, "");
-        if ((recText != NULL) && strcmp(recText, "start")) {
+        if ((recText != NULL) && !strcmp(recText, "start")) {
           // successful command
           if(startCar()) {
-            strcpy(responseBuffer, "Success");
+            strcpy(responseBuffer, "Start Success");
           } else {
             strcpy(responseBuffer, "Start Failed");
+          }
+        } else if ((recText != NULL) && !strcmp(recText, "unlock")) {
+          if(unlockCar()) {
+            strcpy(responseBuffer, "Unlock Success");
+          } else {
+            strcpy(responseBuffer, "Unlock Failed");
+          }
+        } else if ((recText != NULL) && !strcmp(recText, "lock")) {
+          if(lockCar()) {
+            strcpy(responseBuffer, "Lock Success");
+          } else {
+            strcpy(responseBuffer, "Lock Failed");
+          }
+        } else if ((recText != NULL) && !strcmp(recText, "alarm")) {
+          if(alarmCar()) {
+            strcpy(responseBuffer, "Alarm Success");
+          } else {
+            strcpy(responseBuffer, "Alarm Failed");
           }
         } else {
           strcpy(responseBuffer, "Bad Command - Failed");
@@ -128,7 +150,7 @@ boolean eepromAddrOk(int addr) {
   return ((addr >= EEPROM_MIN_ADDR) && (addr <= EEPROM_MAX_ADDR));
 }
 
-boolean eepromWritePass(int startAddr, const byte* array, int numBytes) {
+boolean eepromWriteBytes(int startAddr, const byte* array, int numBytes) {
   // counter
   int i;
   
@@ -143,6 +165,16 @@ boolean eepromWritePass(int startAddr, const byte* array, int numBytes) {
   }
   
   return true;
+}
+
+boolean eepromWritePass(int addr, const char* string) {
+
+  int numBytes; // actual number of bytes to be written
+
+  //write the string contents plus the string terminator byte (0x00)
+  numBytes = strlen(string) + 1;
+
+  return eepromWriteBytes(addr, (const byte*)string, numBytes);
 }
 
 boolean eepromReadPass(int addr, char* buffer, int bufSize) {
@@ -198,6 +230,26 @@ boolean startCar() {
   pressFobButton(FOB_LOCK, 200, 200);
   pressFobButton(FOB_LOCK, 200, 200);
   pressFobButton(FOB_START, 2000, 0);
+  //check some pin
+  return true;
+}
+
+boolean unlockCar() {
+  pressFobButton(FOB_UNLOCK, 200, 200);
+  pressFobButton(FOB_UNLOCK, 200, 0);
+  //check some pin
+  return true;
+}
+
+boolean lockCar() {
+  pressFobButton(FOB_LOCK, 200, 200);
+  pressFobButton(FOB_LOCK, 200, 0);
+  //check some pin
+  return true;
+}
+
+boolean alarmCar() {
+  pressFobButton(FOB_ALARM, 200, 200);
   //check some pin
   return true;
 }
