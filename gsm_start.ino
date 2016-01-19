@@ -68,7 +68,6 @@ void setup() {
   }
 
   fona.setSMSInterrupt(1);
-  digitalWrite(RI, HIGH);
   attachInterrupt(digitalPinToInterrupt(RI), message, LOW);
   DEBUG_PRINTLN("FONA Ready, Arduino Ready");
 
@@ -128,6 +127,15 @@ void handleSMS() {
         } else {
           strcpy(responseBuffer, "Alarm Failed");
         }
+      } else if ((recText != NULL) && !strcmp(recText, "batt")) {
+        char bat[5];
+        uint16_t vbat;
+        if (fona.getBattVoltage(&vbat)) {
+          sprintf(bat, "%d", vbat);
+          strcpy(responseBuffer, bat);
+        } else {
+          strcpy(responseBuffer, "Battery Read Failed");
+        }
       } else {
         strcpy(responseBuffer, "Bad Command - Failed");
       }
@@ -156,7 +164,7 @@ void handleSMS() {
 }
 
 void enterSleep() {
-  set_sleep_mode(SLEEP_MODE_PWR_SAVE);
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
 
   sleep_enable();
 
@@ -170,7 +178,7 @@ void loop() {
     delay(5000);
     handleSMS();
   } else {
-    delay(5000);
+    enterSleep();
   }
 }
 
