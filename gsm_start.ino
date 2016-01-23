@@ -4,18 +4,9 @@
 #include "Adafruit_FONA.h"
 #include <avr/sleep.h>
 #include <EEPROM.h>
-const int EEPROM_MIN_ADDR = 0;
-const int EEPROM_MAX_ADDR = 511;
 
-// pin definitions
-#define FONA_RST 4
-#define FOB_LOCK 12
-#define FOB_UNLOCK 13
-#define FOB_START 14
-#define FOB_ALARM 15
-#define FOB_TRUNK 16
-#define RI 6
-
+// enables all debug prints
+//#define DEBUG
 // debug prints
 #ifdef DEBUG
   #define DEBUG_PRINT(x) Serial.print(x)
@@ -24,6 +15,30 @@ const int EEPROM_MAX_ADDR = 511;
   #define DEBUG_PRINT(x)
   #define DEBUG_PRINTLN(x)
 #endif
+
+// key fob pin definitions
+#define FOB_LOCK 12
+#define FOB_UNLOCK 13
+#define FOB_START 14
+#define FOB_ALARM 15
+#define FOB_TRUNK 16
+
+// gsm module pin definitions
+#define FONA_RST 3
+#define FONA_PS 4
+#define FONA_KEY 5
+#define FONA_RI 6
+#define FONA_TX 7
+#define FONA_RX 8
+#define FONA_NS 9
+
+// unused pins array - used to save some power
+int unused[] = {0, 1, 2, 10, 11, 17, 18, 19, 20, 21, 22, 23};
+
+// eeprom constants
+const int EEPROM_MIN_ADDR = 0;
+const int EEPROM_MAX_ADDR = 511;
+
 // this is a large buffer for replies
 char replybuffer[255];
 
@@ -42,6 +57,12 @@ void setup() {
   DEBUG_PRINTLN(F("GSM Start Module"));
   DEBUG_PRINTLN(F("Initializing FONA....(May take 3 seconds)"));
 
+  // pin config for unused pins
+  for(int i = 0; i < sizeof(unused)/sizeof(int); i++) {
+    pinMode(i, OUTPUT);
+    digitalWrite(i, LOW);
+  }
+  
   // pin config for Key Fob
   digitalWrite(FOB_LOCK, HIGH);
   pinMode(FOB_LOCK, OUTPUT);
@@ -51,6 +72,26 @@ void setup() {
   pinMode(FOB_START, OUTPUT);
   digitalWrite(FOB_ALARM, HIGH);
   pinMode(FOB_ALARM, OUTPUT);
+  digitalWrite(FOB_TRUNK, HIGH);
+  pinMode(FOB_TRUNK, OUTPUT);
+
+  // pin config for fona
+  // FONA_RST handled by Fona library
+  pinMode(FONA_PS, INPUT);
+  digitalWrite(FONA_KEY, HIGH);
+  pinMode(FONA_KEY, OUTPUT);
+  pinMode(FONA_RI, INPUT);
+  // FONA_TX -> Hardware Serial RX
+  // FONA_RX -> Hardware Serial TX
+  pinMode(FONA_NS, INPUT);
+
+  // power on the Fona if it is off
+  if (!digitalRead(FONA_PS)) {
+    DEBUG_PRINTLN(F("Powering on Fona"));
+    digitalWrite(FONA_KEY, LOW);
+    delay(2000);
+    digitalWrite(FONA_KEY, HIGH);
+  }
 
   // make it slow so its easy to read!
   fonaSerial->begin(4800);
@@ -68,7 +109,7 @@ void setup() {
   }
 
   fona.setSMSInterrupt(1);
-  attachInterrupt(digitalPinToInterrupt(RI), message, LOW);
+  attachInterrupt(digitalPinToInterrupt(FONA_RI), message, LOW);
   DEBUG_PRINTLN("FONA Ready, Arduino Ready");
 
 }
