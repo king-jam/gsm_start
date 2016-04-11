@@ -13,6 +13,10 @@ env:
 
 install:
     - pip install -U platformio
+    
+    #download the 
+    https://github.com/adafruit/Adafruit_FONA/archive/master.zip -O /tmp/Adafruit_FONA.zip
+    unzip /tmp/Adafruit_FONA.zip -d /tmp/
 
 script:
-    - platformio ci --board=teensy20
+    - platformio ci --lib=/tmp/ --board=teensy20
