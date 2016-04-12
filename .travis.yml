@@ -19,4 +19,4 @@ install:
     - unzip /tmp/Adafruit_FONA.zip -d /tmp/
 
 script:
-    - platformio ci --lib=/tmp/ --board=teensy20
+    - platformio ci --lib="/tmp/Adafruit_FONA-master" --board=teensy20
