@@ -5,5 +5,3 @@ Uses a Teensy 2.0 to control a GSM module for starting a car. Very simple and pr
 Needs to be expanded - build log will be linked to website soon.
 
 Reset button to be added since software lockup is possible. Maybe watchdog instead?
-
-TODO: FIX THIS THING
