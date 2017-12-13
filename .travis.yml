@@ -9,6 +9,7 @@ cache:
         - "~/.platformio"
 
 env:
+    - PLATFORMIO_CI_SRC=fonahelper.cpp
     - PLATFORMIO_CI_SRC=gsm_start.ino
 
 install:
