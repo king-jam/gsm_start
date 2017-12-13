@@ -1,29 +1,30 @@
 /***************************************************
-*/
+  Adafruit MQTT Library FONA Example
 
+  Designed specifically to work with the Adafruit FONA
+  ----> http://www.adafruit.com/products/1946
+  ----> http://www.adafruit.com/products/1963
+  ----> http://www.adafruit.com/products/2468
+  ----> http://www.adafruit.com/products/2542
+
+  These cellular modules use TTL Serial to communicate, 2 pins are
+  required to interface.
+
+  Adafruit invests time and resources providing this open source code,
+  please support Adafruit and open-source hardware by purchasing
+  products from Adafruit!
+
+  Written by Limor Fried/Ladyada for Adafruit Industries.
+  MIT license, all text above must be included in any redistribution
+ ****************************************************/
+#include <Adafruit_SleepyDog.h>
 #include "Adafruit_FONA.h"
-#include <avr/sleep.h>
-#include <EEPROM.h>
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_FONA.h"
 
-// enables all debug prints
-//#define DEBUG
-// debug prints
-#ifdef DEBUG
-  #define DEBUG_PRINT(x) Serial.print(x)
-  #define DEBUG_PRINTLN(x) Serial.println(x)
-#else
-  #define DEBUG_PRINT(x)
-  #define DEBUG_PRINTLN(x)
-#endif
+/*************************** FONA Pins ***********************************/
 
-// key fob pin definitions
-#define FOB_LOCK 12
-#define FOB_UNLOCK 13
-#define FOB_START 14
-#define FOB_ALARM 15
-#define FOB_TRUNK 16
-
-// gsm module pin definitions
+// Default pins for Feather 32u4 FONA
 #define FONA_RST 3
 #define FONA_PS 4
 #define FONA_KEY 5
@@ -32,49 +33,89 @@
 #define FONA_RX 8
 #define FONA_NS 9
 
-// unused pins array - used to save some power
-int unused[] = {0, 1, 2, 10, 11, 17, 18, 19, 20, 21, 22, 23};
-
-// eeprom constants
-const int EEPROM_MIN_ADDR = 0;
-const int EEPROM_MAX_ADDR = 511;
-
-// this is a large buffer for replies
-char replybuffer[255];
-
-// Hardware serial is also possible!
-HardwareSerial *fonaSerial = &Serial1;
-
+//SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);
+HardwareSerial *fonaSS = &Serial1;
 Adafruit_FONA fona = Adafruit_FONA(FONA_RST);
 
-volatile bool gotSMS = false;
+/************************* FOB Pins ******************************************/
+#define FOB_LOCK 12
+#define FOB_UNLOCK 13
+#define FOB_START 14
+#define FOB_ALARM 15
+#define FOB_TRUNK 16
+
+/************************* WiFi Access Point *********************************/
+
+  // Optionally configure a GPRS APN, username, and password.
+  // You might need to do this to access your network's GPRS/data
+  // network.  Contact your provider for the exact APN, username,
+  // and password values.  Username and password are optional and
+  // can be removed, but APN is required.
+#define FONA_APN       ""
+#define FONA_USERNAME  ""
+#define FONA_PASSWORD  ""
+
+/************************* Adafruit.io Setup *********************************/
+
+#define AIO_SERVER      "io.adafruit.com"
+#define AIO_SERVERPORT  1883
+#define AIO_USERNAME    "jamesk"
+#define AIO_KEY         "...your AIO key..."
+
+/************ Global State (you don't need to change this!) ******************/
+
+// Setup the FONA MQTT class by passing in the FONA class and MQTT server and login details.
+Adafruit_MQTT_FONA mqtt(&fona, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+
+// You don't need to change anything below this line!
+#define halt(s) { Serial.println(F( s )); while(1);  }
+
+// FONAconnect is a helper function that sets up the FONA and connects to
+// the GPRS network. See the fonahelper.cpp tab above for the source!
+boolean FONAconnect(const __FlashStringHelper *apn, const __FlashStringHelper *username, const __FlashStringHelper *password);
+
+/****************************** Feeds ***************************************/
+
+// Setup a feed called 'photocell' for publishing.
+// Notice MQTT paths for AIO follow the form: <username>/feeds/<feedname>
+const char STATUS_FEED[] PROGMEM = AIO_USERNAME "/f/starter.status";
+Adafruit_MQTT_Publish status = Adafruit_MQTT_Publish(&mqtt, STATUS_FEED, MQTT_QOS_1);
+
+// Setup a feeds for subscribing to changes.
+Adafruit_MQTT_Subscribe start = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/f/starter.start");
+Adafruit_MQTT_Subscribe lock = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/f/starter.lock");
+Adafruit_MQTT_Subscribe unlock = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/f/starter.unlock");
+Adafruit_MQTT_Subscribe alarm = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/f/starter.alarm");
+Adafruit_MQTT_Subscribe trunk = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/f/starter.trunk");
+Adafruit_MQTT_Subscribe forceReset = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/f/starter.reset");
+/*************************** Sketch Code ************************************/
+
+// How many transmission failures in a row we're willing to be ok with before reset
+uint8_t txfailures = 0;
+#define MAXTXFAILURES 3
+unsigned long previousPingMillis = 0; // ping timer
+unsigned long previousStatusMillis = 0; // status timer
+const long PING_INTERVAL = 60000; // every minute
+const long STATUS_INTERVAL = 600000; // every 10 minutes
 
 void setup() {
+  while (!Serial);
 
-#ifdef DEBUG
-  Serial.begin(115200);
-#endif
-  DEBUG_PRINTLN(F("GSM Start Module"));
-  DEBUG_PRINTLN(F("Initializing FONA....(May take 3 seconds)"));
-
-  // pin config for unused pins
-  for(int i = 0; i < sizeof(unused)/sizeof(int); i++) {
-    pinMode(i, OUTPUT);
-    digitalWrite(i, LOW);
-  }
+  // Watchdog is optional!
+  Watchdog.enable(8000);
   
-  // pin config for Key Fob
-  digitalWrite(FOB_LOCK, HIGH);
-  pinMode(FOB_LOCK, OUTPUT);
-  digitalWrite(FOB_UNLOCK, HIGH);
-  pinMode(FOB_UNLOCK, OUTPUT);
-  digitalWrite(FOB_START, HIGH);
-  pinMode(FOB_START, OUTPUT);
-  digitalWrite(FOB_ALARM, HIGH);
-  pinMode(FOB_ALARM, OUTPUT);
-  digitalWrite(FOB_TRUNK, HIGH);
-  pinMode(FOB_TRUNK, OUTPUT);
+  Serial.begin(115200);
 
+  Serial.println(F("Adafruit FONA MQTT demo"));
+
+
+  // disable unused pins to save some power
+  disableUnusedPins();
+
+  // setup the pins connected to the keyfob
+  initFob();
+
+  Watchdog.reset();
   // pin config for fona
   // FONA_RST handled by Fona library
   pinMode(FONA_PS, INPUT);
@@ -92,208 +133,146 @@ void setup() {
     delay(2000);
     digitalWrite(FONA_KEY, HIGH);
   }
-
-  // make it slow so its easy to read!
-  fonaSerial->begin(4800);
-  if (! fona.begin(*fonaSerial)) {
-    DEBUG_PRINTLN(F("Couldn't find FONA"));
-    while (1);
+  
+  // setup the subscription
+  Watchdog.reset();
+  mqtt.subscribe(&start);
+  mqtt.subscribe(&lock);
+  mqtt.subscribe(&unlock);
+  mqtt.subscribe(&alarm);
+  mqtt.subscribe(&trunk);
+  mqtt.subscribe(&forceReset);
+  
+  Watchdog.reset();
+  delay(5000);  // wait a few seconds to stabilize connection
+  Watchdog.reset();
+  
+  // Initialise the FONA module
+  while (! FONAconnect(F(FONA_APN), F(FONA_USERNAME), F(FONA_PASSWORD))) {
+    Serial.println("Retrying FONA");
   }
-  DEBUG_PRINTLN(F("FONA is OK"));
 
-  // Print SIM card IMEI number.
-  char imei[15] = {0}; // MUST use a 16 character buffer for IMEI!
-  uint8_t imeiLen = fona.getIMEI(imei);
-  if (imeiLen > 0) {
-    DEBUG_PRINT("SIM card IMEI: "); DEBUG_PRINTLN(imei);
-  }
+  Serial.println(F("Connected to Cellular!"));
 
-  fona.setSMSInterrupt(1);
-  attachInterrupt(digitalPinToInterrupt(FONA_RI), message, LOW);
-  DEBUG_PRINTLN("FONA Ready, Arduino Ready");
+  Watchdog.reset();
+  delay(5000);  // wait a few seconds to stabilize connection
+  Watchdog.reset();
 
-}
-
-void message() {
-  gotSMS = 1;
-}
-
-void handleSMS() {
-  gotSMS = 0;
-  int charCount = 0;
-  uint16_t smslen;
-  char password[20];
-  int8_t smsnum = fona.getNumSMS();
-  char callerIDbuffer[32]; //we'll store the SMS sender number here
-  DEBUG_PRINT("Num SMS: ");
-  DEBUG_PRINTLN(smsnum);
-  for (int i = 1; i < smsnum + 1; i++) {
-    // Retrieve SMS sender address/phone number.
-    if (! fona.getSMSSender(i, callerIDbuffer, 250)) {
-      DEBUG_PRINTLN("Didn't find SMS message in slot!");
-    }
-    DEBUG_PRINT(F("FROM: ")); DEBUG_PRINTLN(callerIDbuffer);
-
-    if (! fona.readSMS(i, replybuffer, 250, &smslen)) {
-      DEBUG_PRINTLN("Failed to read SMS!");
-    }
-    char responseBuffer[255]; //we'll store the response here
-
-    eepromReadPass(0, password, sizeof(password));
-    char* recText = strtok(replybuffer, ":");
-    if ((recText != NULL) && !strcmp(recText, password)) {
-      recText = strtok(NULL, "");
-      if ((recText != NULL) && !strcmp(recText, "start")) {
-        // successful command
-        if (startCar()) {
-          strcpy(responseBuffer, "Start Success");
-        } else {
-          strcpy(responseBuffer, "Start Failed");
-        }
-      } else if ((recText != NULL) && !strcmp(recText, "unlock")) {
-        if (unlockCar()) {
-          strcpy(responseBuffer, "Unlock Success");
-        } else {
-          strcpy(responseBuffer, "Unlock Failed");
-        }
-      } else if ((recText != NULL) && !strcmp(recText, "lock")) {
-        if (lockCar()) {
-          strcpy(responseBuffer, "Lock Success");
-        } else {
-          strcpy(responseBuffer, "Lock Failed");
-        }
-      } else if ((recText != NULL) && !strcmp(recText, "alarm")) {
-        if (alarmCar()) {
-          strcpy(responseBuffer, "Alarm Success");
-        } else {
-          strcpy(responseBuffer, "Alarm Failed");
-        }
-      } else if ((recText != NULL) && !strcmp(recText, "batt")) {
-        char bat[5];
-        uint16_t vbat;
-        if (fona.getBattVoltage(&vbat)) {
-          sprintf(bat, "%d", vbat);
-          strcpy(responseBuffer, bat);
-        } else {
-          strcpy(responseBuffer, "Battery Read Failed");
-        }
-      } else {
-        strcpy(responseBuffer, "Bad Command - Failed");
-      }
-    } else {
-      strcpy(responseBuffer, "Bad Password or spam\n");
-      strcat(responseBuffer, replybuffer);
-    }
-
-    //Send back an automatic response
-    DEBUG_PRINTLN("Sending reponse...");
-    if (! fona.sendSMS(callerIDbuffer, responseBuffer)) {
-      DEBUG_PRINTLN(F("Failed"));
-    } else {
-      DEBUG_PRINTLN(F("Sent!"));
-    }
-
-    // delete the original msg after it is processed
-    //   otherwise, we will fill up all the slots
-    //   and then we won't be able to receive SMS anymore
-    if (fona.deleteSMS(i)) {
-      DEBUG_PRINTLN(F("OK!"));
-    } else {
-      DEBUG_PRINTLN(F("Couldn't delete"));
-    }
-  }
-}
-
-void enterSleep() {
-  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
-
-  sleep_enable();
-
-  sleep_mode();
-
-  sleep_disable();
+  mqtt.will(STATUS_FEED, "Down");
+  Watchdog.reset();
 }
 
 void loop() {
-  if (gotSMS) {
-    delay(5000);
-    handleSMS();
+  unsigned long currentMillis;
+  // Make sure to reset watchdog every loop iteration!
+  Watchdog.reset();
+
+  // Ensure the connection to the MQTT server is alive (this will make the first
+  // connection and automatically reconnect when disconnected).  See the MQTT_connect
+  // function definition further below.
+  MQTT_connect();
+
+  Watchdog.reset();
+ 
+  // this is our 'wait for incoming subscription packets' busy subloop
+  Adafruit_MQTT_Subscribe *subscription;
+  while ((subscription = mqtt.readSubscription(5000))) {
+    if (subscription == &start) {
+      startCar();
+      Watchdog.reset();
+      publishResponse("Starting Car...");
+    }
+    if (subscription == &lock) {
+      lockCar();
+      Watchdog.reset();
+      publishResponse("Locking Car...");
+    }
+    if (subscription == &unlock) {
+      unlockCar();
+      Watchdog.reset();
+      publishResponse("Unlocking Car...");
+    }
+    if (subscription == &alarm) {
+      alarmCar();
+      Watchdog.reset();
+      publishResponse("Triggering Car Alarm...");
+    }
+    if (subscription == &trunk) {
+      openTrunk();
+      Watchdog.reset();
+      publishResponse("Opening Trunk...");
+    }
+    if (subscription == &forceReset) {
+      // cause Watchdog to reset us
+      delay(10000);
+    }
+  }
+
+  // Send an up status every 10 minutes or so to let us know if we should expect things to work.
+  Watchdog.reset();
+  currentMillis = millis();
+  if(currentMillis - previousStatusMillis >= STATUS_INTERVAL) {
+    previousStatusMillis = currentMillis;
+    publishResponse("Up");
+  }
+  
+  Watchdog.reset();
+  //ping the server to keep the mqtt connection alive, only needed if we're not publishing
+  //often enough (within the KEEPALIVE setting)
+  currentMillis = millis();
+  if(currentMillis - previousPingMillis >= PING_INTERVAL) {
+    previousPingMillis = currentMillis;
+    if(! mqtt.ping()) {
+      Serial.println(F("MQTT Ping failed."));
+    }
+  }
+}
+
+// Function to connect and reconnect as necessary to the MQTT server.
+// Should be called in the loop function and it will take care if connecting.
+void MQTT_connect() {
+  int8_t ret;
+
+  // Stop if already connected.
+  if (mqtt.connected()) {
+    return;
+  }
+
+  Serial.print("Connecting to MQTT... ");
+
+  while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
+    Serial.println(mqtt.connectErrorString(ret));
+    Serial.println("Retrying MQTT connection in 5 seconds...");
+    mqtt.disconnect();
+    delay(5000);  // wait 5 seconds
+  }
+  Serial.println("MQTT Connected!");
+}
+
+void publishResponse(const char *payload) {
+    // Now we can publish results!
+  if (! status.publish(payload)) {
+    Serial.println(F("Failed to publish"));
+    txfailures++;
   } else {
-    enterSleep();
+    Serial.println(F("OK!"));
+    txfailures = 0;
   }
 }
 
-boolean eepromAddrOk(int addr) {
-  return ((addr >= EEPROM_MIN_ADDR) && (addr <= EEPROM_MAX_ADDR));
-}
 
-boolean eepromWriteBytes(int startAddr, const byte* array, int numBytes) {
-  // counter
-  int i;
-
-  // both first byte and last byte addresses must fall within
-  // the allowed range
-  if (!eepromAddrOk(startAddr) || !eepromAddrOk(startAddr + numBytes)) {
-    return false;
-  }
-
-  for (i = 0; i < numBytes; i++) {
-    EEPROM.write(startAddr + i, array[i]);
-  }
-
-  return true;
-}
-
-boolean eepromWritePass(int addr, const char* string) {
-
-  int numBytes; // actual number of bytes to be written
-
-  //write the string contents plus the string terminator byte (0x00)
-  numBytes = strlen(string) + 1;
-
-  return eepromWriteBytes(addr, (const byte*)string, numBytes);
-}
-
-boolean eepromReadPass(int addr, char* buffer, int bufSize) {
-  byte ch; // byte read from eeprom
-  int bytesRead; // number of bytes read so far
-
-  if (!eepromAddrOk(addr)) { // check start address
-    return false;
-  }
-
-  if (bufSize == 0) { // how can we store bytes in an empty buffer ?
-    return false;
-  }
-
-  // is there is room for the string terminator only, no reason to go further
-  if (bufSize == 1) {
-    buffer[0] = 0;
-    return true;
-  }
-
-  bytesRead = 0; // initialize byte counter
-  ch = EEPROM.read(addr + bytesRead); // read next byte from eeprom
-  buffer[bytesRead] = ch; // store it into the user buffer
-  bytesRead++; // increment byte counter
-
-  // stop conditions:
-  // - the character just read is the string terminator one (0x00)
-  // - we have filled the user buffer
-  // - we have reached the last eeprom address
-  while ( (ch != 0x00) && (bytesRead < bufSize) && ((addr + bytesRead) <= EEPROM_MAX_ADDR) ) {
-    // if no stop condition is met, read the next byte from eeprom
-    ch = EEPROM.read(addr + bytesRead);
-    buffer[bytesRead] = ch; // store it into the user buffer
-    bytesRead++; // increment byte counter
-  }
-
-  // make sure the user buffer has a string terminator, (0x00) as its last byte
-  if ((ch != 0x00) && (bytesRead >= 1)) {
-    buffer[bytesRead - 1] = 0;
-  }
-
-  return true;
+void initFob() {
+  // pin config for Key Fob
+  digitalWrite(FOB_LOCK, HIGH);
+  pinMode(FOB_LOCK, OUTPUT);
+  digitalWrite(FOB_UNLOCK, HIGH);
+  pinMode(FOB_UNLOCK, OUTPUT);
+  digitalWrite(FOB_START, HIGH);
+  pinMode(FOB_START, OUTPUT);
+  digitalWrite(FOB_ALARM, HIGH);
+  pinMode(FOB_ALARM, OUTPUT);
+  digitalWrite(FOB_TRUNK, HIGH);
+  pinMode(FOB_TRUNK, OUTPUT);
 }
 
 void pressFobButton(int pin, int onTime, int offTime) {
@@ -331,5 +310,19 @@ boolean alarmCar() {
   return true;
 }
 
+boolean openTrunk() {
+  pressFobButton(FOB_TRUNK, 200, 200);
+  //check some pin
+  return true;
+}
 
+void disableUnusedPins() {
+  // pin config for unused pins
+  // unused pins array - used to save some power
+  int unused[] = {0, 1, 2, 10, 11, 17, 18, 19, 20, 21, 22, 23};
+  for(unsigned int i = 0; i < sizeof(unused)/sizeof(int); i++) {
+    pinMode(i, OUTPUT);
+    digitalWrite(i, LOW);
+  }
+}
 
