@@ -9,7 +9,6 @@ cache:
         - "~/.platformio"
 
 env:
-    - PLATFORMIO_CI_SRC=fonahelper.cpp
     - PLATFORMIO_CI_SRC=gsm_start.ino
 
 install:
@@ -27,4 +26,4 @@ install:
     - wget https://github.com/adafruit/Adafruit_MQTT_Library/archive/master.zip -O /tmp/Adafruit_MQTT_Library.zip
     - unzip /tmp/Adafruit_MQTT_Library.zip -d /tmp/
 script:
-    - platformio ci --lib="/tmp/Adafruit_FONA-master" --lib="/tmp/Adafruit_MQTT_Library-master" --lib="/tmp/Adafruit_SleepyDog-master" --board=teensy20
+    - platformio ci --lib="." --lib="/tmp/Adafruit_FONA-master" --lib="/tmp/Adafruit_MQTT_Library-master" --lib="/tmp/Adafruit_SleepyDog-master" --board=teensy20
