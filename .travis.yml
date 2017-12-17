@@ -13,10 +13,13 @@ env:
 
 install:
     - pip install -U platformio
-    
-    #download the 
+
+    #download the FONA library
     - wget https://github.com/adafruit/Adafruit_FONA/archive/master.zip -O /tmp/Adafruit_FONA.zip
     - unzip /tmp/Adafruit_FONA.zip -d /tmp/
+    #download the Watchdog Lib
+    - wget https://github.com/adafruit/Adafruit_SleepyDog/archive/master.zip -O /tmp/Adafruit_SleepyDog.zip
+    - unzip /tmp/Adafruit_SleepyDog.zip -d /tmp/
 
 script:
-    - platformio ci --lib="/tmp/Adafruit_FONA-master" --board=teensy20
+    - platformio ci --lib="/tmp/Adafruit_FONA-master" --lib="/tmp/Adafruit_SleepyDog-master" --board=teensy20

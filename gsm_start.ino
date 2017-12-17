@@ -1,17 +1,25 @@
 /***************************************************
 */
 
-#include "Adafruit_FONA.h"
+#include <Adafruit_FONA.h>
+#include <Adafruit_SleepyDog.h>
 #include <avr/sleep.h>
 #include <EEPROM.h>
 
-// enables all debug prints
-//#define DEBUG
+//#define SLEEP_ENABLED // controls whether we have a watchdog or not
+
+// enables all debug prints. this gets screwy with USB Serial so tied
+// directly to power savings enterSleep() command
+#define DEBUG
 // debug prints
 #ifdef DEBUG
+  #undef DEBUG_PRINT // fix shadowing DEFs
+  #undef DEBUG_PRINTLN // fix shadowing DEFs
   #define DEBUG_PRINT(x) Serial.print(x)
   #define DEBUG_PRINTLN(x) Serial.println(x)
 #else
+  #undef DEBUG_PRINT // fix shadowing DEFs
+  #undef DEBUG_PRINTLN // fix shadowing DEFs
   #define DEBUG_PRINT(x)
   #define DEBUG_PRINTLN(x)
 #endif
@@ -33,7 +41,7 @@
 #define FONA_NS 9
 
 // unused pins array - used to save some power
-int unused[] = {0, 1, 2, 10, 11, 17, 18, 19, 20, 21, 22, 23};
+unsigned int unused[] = {0, 1, 2, 10, 11, 17, 18, 19, 20, 21, 22, 23};
 
 // eeprom constants
 const int EEPROM_MIN_ADDR = 0;
@@ -51,18 +59,30 @@ volatile bool gotSMS = false;
 
 void setup() {
 
+  // determine last reset source
+  boolean resetByWatchdog = bit_is_set(MCUSR, WDRF);
+
+#ifndef SLEEP_ENABLED
+  Watchdog.enable(8000);
+#endif
+
 #ifdef DEBUG
   Serial.begin(115200);
 #endif
+  DEBUG_PRINT(F("Reset by Watchdog?: ")); DEBUG_PRINTLN(resetByWatchdog);
   DEBUG_PRINTLN(F("GSM Start Module"));
   DEBUG_PRINTLN(F("Initializing FONA....(May take 3 seconds)"));
-
+#ifndef SLEEP_ENABLED
+  Watchdog.reset();
+#endif
   // pin config for unused pins
-  for(int i = 0; i < sizeof(unused)/sizeof(int); i++) {
+  for(unsigned int i = 0; i < sizeof(unused)/sizeof(unsigned int); i++) {
     pinMode(i, OUTPUT);
     digitalWrite(i, LOW);
   }
-  
+#ifndef SLEEP_ENABLED
+  Watchdog.reset();
+#endif
   // pin config for Key Fob
   digitalWrite(FOB_LOCK, HIGH);
   pinMode(FOB_LOCK, OUTPUT);
@@ -74,7 +94,9 @@ void setup() {
   pinMode(FOB_ALARM, OUTPUT);
   digitalWrite(FOB_TRUNK, HIGH);
   pinMode(FOB_TRUNK, OUTPUT);
-
+#ifndef SLEEP_ENABLED
+  Watchdog.reset();
+#endif
   // pin config for fona
   // FONA_RST handled by Fona library
   pinMode(FONA_PS, INPUT);
@@ -84,7 +106,20 @@ void setup() {
   // FONA_TX -> Hardware Serial RX
   // FONA_RX -> Hardware Serial TX
   pinMode(FONA_NS, INPUT);
-
+#ifndef SLEEP_ENABLED
+  Watchdog.reset();
+#endif
+  // power off the Fona if we took a hit from Watchdog
+  // will get powered on by next block
+  if (resetByWatchdog) {
+    DEBUG_PRINTLN(F("Powering off Fona"));
+    digitalWrite(FONA_KEY, LOW);
+    delay(2000);
+    digitalWrite(FONA_KEY, HIGH);
+  }
+#ifndef SLEEP_ENABLED
+  Watchdog.reset();
+#endif
   // power on the Fona if it is off
   if (!digitalRead(FONA_PS)) {
     DEBUG_PRINTLN(F("Powering on Fona"));
@@ -92,7 +127,9 @@ void setup() {
     delay(2000);
     digitalWrite(FONA_KEY, HIGH);
   }
-
+#ifndef SLEEP_ENABLED
+  Watchdog.reset();
+#endif
   // make it slow so its easy to read!
   fonaSerial->begin(4800);
   if (! fona.begin(*fonaSerial)) {
@@ -100,18 +137,39 @@ void setup() {
     while (1);
   }
   DEBUG_PRINTLN(F("FONA is OK"));
-
+#ifndef SLEEP_ENABLED
+  Watchdog.reset();
+#endif
   // Print SIM card IMEI number.
   char imei[15] = {0}; // MUST use a 16 character buffer for IMEI!
   uint8_t imeiLen = fona.getIMEI(imei);
   if (imeiLen > 0) {
     DEBUG_PRINT("SIM card IMEI: "); DEBUG_PRINTLN(imei);
   }
-
+#ifndef SLEEP_ENABLED
+  Watchdog.reset();
+#endif
   fona.setSMSInterrupt(1);
   attachInterrupt(digitalPinToInterrupt(FONA_RI), message, LOW);
-  DEBUG_PRINTLN("FONA Ready, Arduino Ready");
+  DEBUG_PRINTLN(F("FONA Ready, Arduino Ready"));
+#ifndef SLEEP_ENABLED
+  Watchdog.reset();
+#endif
+}
 
+void loop() {
+  if (gotSMS) {
+    delay(5000);
+    handleSMS();
+  } else {
+    #ifdef SLEEP_ENABLED
+      #ifndef DEBUG
+      enterSleep();
+      #endif
+    #else
+      Watchdog.reset();
+    #endif
+  }
 }
 
 void message() {
@@ -120,87 +178,76 @@ void message() {
 
 void handleSMS() {
   gotSMS = 0;
-  int charCount = 0;
   uint16_t smslen;
   char password[20];
   int8_t smsnum = fona.getNumSMS();
   char callerIDbuffer[32]; //we'll store the SMS sender number here
-  DEBUG_PRINT("Num SMS: ");
+  DEBUG_PRINT(F("Num SMS: "));
   DEBUG_PRINTLN(smsnum);
+#ifndef SLEEP_ENABLED
+  Watchdog.reset();
+#endif
   for (int i = 1; i < smsnum + 1; i++) {
+  #ifndef SLEEP_ENABLED
+    Watchdog.reset();
+  #endif
     // Retrieve SMS sender address/phone number.
     if (! fona.getSMSSender(i, callerIDbuffer, 250)) {
-      DEBUG_PRINTLN("Didn't find SMS message in slot!");
+      DEBUG_PRINTLN(F("Didn't find SMS message in slot!"));
     }
     DEBUG_PRINT(F("FROM: ")); DEBUG_PRINTLN(callerIDbuffer);
-
+  #ifndef SLEEP_ENABLED
+    Watchdog.reset();
+  #endif
     if (! fona.readSMS(i, replybuffer, 250, &smslen)) {
-      DEBUG_PRINTLN("Failed to read SMS!");
+      DEBUG_PRINTLN(F("Failed to read SMS!"));
     }
-    char responseBuffer[255]; //we'll store the response here
-
+  #ifndef SLEEP_ENABLED
+    Watchdog.reset();
+  #endif
     eepromReadPass(0, password, sizeof(password));
     char* recText = strtok(replybuffer, ":");
     if ((recText != NULL) && !strcmp(recText, password)) {
       recText = strtok(NULL, "");
       if ((recText != NULL) && !strcmp(recText, "start")) {
         // successful command
-        if (startCar()) {
-          strcpy(responseBuffer, "Start Success");
-        } else {
-          strcpy(responseBuffer, "Start Failed");
-        }
+        DEBUG_PRINTLN(F("Starting Car..."));
+        startCar();
       } else if ((recText != NULL) && !strcmp(recText, "unlock")) {
-        if (unlockCar()) {
-          strcpy(responseBuffer, "Unlock Success");
-        } else {
-          strcpy(responseBuffer, "Unlock Failed");
-        }
+        DEBUG_PRINTLN(F("Unlocking Car..."));
+        unlockCar();
       } else if ((recText != NULL) && !strcmp(recText, "lock")) {
-        if (lockCar()) {
-          strcpy(responseBuffer, "Lock Success");
-        } else {
-          strcpy(responseBuffer, "Lock Failed");
-        }
+        DEBUG_PRINTLN(F("Locking Car..."));
+        lockCar();
       } else if ((recText != NULL) && !strcmp(recText, "alarm")) {
-        if (alarmCar()) {
-          strcpy(responseBuffer, "Alarm Success");
-        } else {
-          strcpy(responseBuffer, "Alarm Failed");
-        }
-      } else if ((recText != NULL) && !strcmp(recText, "batt")) {
-        char bat[5];
-        uint16_t vbat;
-        if (fona.getBattVoltage(&vbat)) {
-          sprintf(bat, "%d", vbat);
-          strcpy(responseBuffer, bat);
-        } else {
-          strcpy(responseBuffer, "Battery Read Failed");
-        }
+        DEBUG_PRINTLN(F("Triggering Alarm..."));
+        alarmCar();
+      } else if ((recText != NULL) && !strcmp(recText, "trunk")) {
+        DEBUG_PRINTLN(F("Opening Trunk..."));
+        openTrunk();
+      } else if ((recText != NULL) && !strcmp(recText, "reset")) {
+        DEBUG_PRINTLN(F("Forcing a Watchdog Reset..."));
+        while(1);
       } else {
-        strcpy(responseBuffer, "Bad Command - Failed");
+        DEBUG_PRINTLN(F("Invalid Command..."));
       }
     } else {
-      strcpy(responseBuffer, "Bad Password or spam\n");
-      strcat(responseBuffer, replybuffer);
+      DEBUG_PRINTLN(F("Bad Password or spam..."));
     }
-
-    //Send back an automatic response
-    DEBUG_PRINTLN("Sending reponse...");
-    if (! fona.sendSMS(callerIDbuffer, responseBuffer)) {
-      DEBUG_PRINTLN(F("Failed"));
-    } else {
-      DEBUG_PRINTLN(F("Sent!"));
-    }
-
+  #ifndef SLEEP_ENABLED
+    Watchdog.reset();
+  #endif
     // delete the original msg after it is processed
     //   otherwise, we will fill up all the slots
     //   and then we won't be able to receive SMS anymore
     if (fona.deleteSMS(i)) {
-      DEBUG_PRINTLN(F("OK!"));
+      DEBUG_PRINTLN(F("REMOVED SMS!"));
     } else {
       DEBUG_PRINTLN(F("Couldn't delete"));
     }
+  #ifndef SLEEP_ENABLED
+    Watchdog.reset();
+  #endif
   }
 }
 
@@ -212,15 +259,6 @@ void enterSleep() {
   sleep_mode();
 
   sleep_disable();
-}
-
-void loop() {
-  if (gotSMS) {
-    delay(5000);
-    handleSMS();
-  } else {
-    enterSleep();
-  }
 }
 
 boolean eepromAddrOk(int addr) {
@@ -331,5 +369,8 @@ boolean alarmCar() {
   return true;
 }
 
-
-
+boolean openTrunk() {
+  pressFobButton(FOB_TRUNK, 2000, 0);
+  //check some pin
+  return true;
+}
