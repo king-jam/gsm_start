@@ -10,7 +10,7 @@
 
 // enables all debug prints. this gets screwy with USB Serial so tied
 // directly to power savings enterSleep() command
-#define DEBUG
+//#define DEBUG
 // debug prints
 #ifdef DEBUG
   #undef DEBUG_PRINT // fix shadowing DEFs
@@ -58,7 +58,7 @@ Adafruit_FONA fona = Adafruit_FONA(FONA_RST);
 volatile bool gotSMS = false;
 
 void setup() {
-
+  
   // determine last reset source
   boolean resetByWatchdog = bit_is_set(MCUSR, WDRF);
 
@@ -155,6 +155,8 @@ void setup() {
 #ifndef SLEEP_ENABLED
   Watchdog.reset();
 #endif
+  DEBUG_PRINTLN(F("Clearing all SMS Messages"));
+  clearSMS();
 }
 
 void loop() {
@@ -167,6 +169,7 @@ void loop() {
       enterSleep();
       #endif
     #else
+      delay(1000);
       Watchdog.reset();
     #endif
   }
@@ -178,6 +181,7 @@ void message() {
 
 void handleSMS() {
   gotSMS = 0;
+  boolean forceReset = false;
   uint16_t smslen;
   char password[20];
   int8_t smsnum = fona.getNumSMS();
@@ -226,8 +230,7 @@ void handleSMS() {
         DEBUG_PRINTLN(F("Opening Trunk..."));
         openTrunk();
       } else if ((recText != NULL) && !strcmp(recText, "reset")) {
-        DEBUG_PRINTLN(F("Forcing a Watchdog Reset..."));
-        while(1);
+        forceReset = true;
       } else {
         DEBUG_PRINTLN(F("Invalid Command..."));
       }
@@ -245,9 +248,41 @@ void handleSMS() {
     } else {
       DEBUG_PRINTLN(F("Couldn't delete"));
     }
+
   #ifndef SLEEP_ENABLED
     Watchdog.reset();
+  #endif 
+
+    if(forceReset) {
+      DEBUG_PRINTLN(F("Forcing a Watchdog Reset..."));
+      while(1);
+    }
+    
+  #ifndef SLEEP_ENABLED
+    Watchdog.reset();
+  #endif    
+  }
+}
+
+void clearSMS() {
+  #define SLOT_MAX 10
+  #ifdef DEBUG
+  int8_t smsnum = fona.getNumSMS();
+  DEBUG_PRINT(F("Num SMS: "));
+  DEBUG_PRINTLN(smsnum);
   #endif
+  for (int i = 1; i < SLOT_MAX + 1; i++) {
+  #ifndef SLEEP_ENABLED
+    Watchdog.reset();
+  #endif    
+    if (fona.deleteSMS(i)) {
+      DEBUG_PRINTLN(F("REMOVED SMS!"));
+    } else {
+      DEBUG_PRINTLN(F("Couldn't delete"));
+    }
+  #ifndef SLEEP_ENABLED
+    Watchdog.reset();
+  #endif    
   }
 }
 
